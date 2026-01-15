@@ -1,0 +1,22 @@
+{
+  "http": {
+    "routers": {
+      "coordinator": {
+        "rule": "PathPrefix(`/`)",
+        "service": "coordinators"
+      }
+    },
+    "services": {
+      "coordinators": {
+        "loadBalancer": {
+          "servers": [
+            {
+              "url": "http://192.168.20.147:8701"
+            }
+          ],
+          "passHostHeader": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+#iniciamos el docker swarn en una de las maquinas
+docker swarm init --advertise-addr $(hostname -I | awk '{print $1}')
+
+#en el manager que hiciste docker swarn init poner esto 
+docker swarm join-token manager
+
+#te devolvera un comando y ejecutar en el segundo manager 
+
+#para ver los nodos 
+docker node ls
+
+#en uno de los manager poner esto , se replicara en todo el cluster 
+docker network create --driver overlay agenda_net
+docker volume create agenda_data
+
+#si no tenemos las imagenes creadas , crearlas en el primer manager  
+docker build -t agenda_backend -f Dockerfile.backend .
+docker build -t agenda_frontend -f Dockerfile.frontend .
+
+#luego debemos exportarlas para el otro manager 
+docker save agenda_backend -o backend.tar
+docker save agenda_frontend -o frontend.tar
+scp backend.tar frontend.tar usuario@<IP_manager2>:/home/usuario/agenda/
+
+#en el manager 2 cargar las imagenes 
+docker load -i backend.tar
+docker load -i frontend.tar
+
+#luego ejecutar el script de despliegue
