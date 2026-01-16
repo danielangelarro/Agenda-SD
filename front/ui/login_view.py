@@ -93,7 +93,10 @@ def show_login_page(api_client):
                 else:
                     try:
                         with st.spinner("Iniciando sesión..."):
-                            result = api_client.login(username, password)
+                            # Usar OfflineAPIClient para login offline-first
+                            from services.offline_api_client import OfflineAPIClient
+                            offline_client = OfflineAPIClient()
+                            result = offline_client.login(username, password)
                             
                             # Verificar que el resultado tenga los campos esperados
                             if not result or "token" not in result or "user_id" not in result:
@@ -102,6 +105,7 @@ def show_login_page(api_client):
                             
                             token = result["token"]
                             user_id = result["user_id"]
+                            is_offline = result.get("offline", False)
 
                             # Guardar en session state
                             st.session_state.logged_in = True
@@ -110,12 +114,17 @@ def show_login_page(api_client):
                             st.session_state.session_token = token
                             st.session_state.websocket_connected = False
                             st.session_state.notifications = []
+                            st.session_state.offline_api_client = offline_client
+                            st.session_state.offline_mode = is_offline
 
                             # Agregar token y user_id a query params para persistencia
                             st.query_params['session_token'] = token
                             st.query_params['user_id'] = str(user_id)
 
-                            st.success("✅ Sesión iniciada correctamente")
+                            if is_offline:
+                                st.warning("⚠️ Sesión iniciada en modo offline (sin conexión)")
+                            else:
+                                st.success("✅ Sesión iniciada correctamente")
                             st.rerun()
                     except Exception as e:
                         st.error(f"❌ {str(e)}")

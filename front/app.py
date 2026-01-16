@@ -17,6 +17,7 @@ from ui.offline_ui import (
     update_offline_state, get_offline_state
 )
 from services.api_client import APIClient
+from services.offline_api_client import OfflineAPIClient
 from services.websocket_client import WebSocketClient
 from services.offline_storage import OfflineStorage
 from services.pending_operations import PendingOperationsQueue
@@ -38,8 +39,15 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize API client
+# Initialize API client singleton (se reemplazará con OfflineAPIClient después del login)
 api_client = APIClient()
+
+def get_offline_api_client() -> OfflineAPIClient:
+    """Obtiene o crea el OfflineAPIClient para la sesión actual."""
+    if 'offline_api_client' not in st.session_state:
+        user_id = st.session_state.get('user_id', 0)
+        st.session_state.offline_api_client = OfflineAPIClient(user_id=user_id)
+    return st.session_state.offline_api_client
 
 def get_ws_client() -> WebSocketClient:
     """WebSocketClient por sesión (evita que pestañas/usuarios se pisen)."""
@@ -291,17 +299,36 @@ def main():
 
             st.rerun()
         
-        # Mostrar página seleccionada
+        # Botón de sincronización manual
+        if sync_manager.is_online() and offline_state['pending_sync_count'] > 0:
+            if st.sidebar.button("🔄 Sincronizar ahora"):
+                with st.spinner("Sincronizando..."):
+                    result = sync_manager.full_sync(st.session_state.session_token)
+                    if result.success:
+                        st.sidebar.success(f"✅ Sincronizado: {result.synced_operations} operaciones")
+                    else:
+                        st.sidebar.error(f"❌ Errores: {len(result.errors)}")
+                st.rerun()
+        
+        # Obtener OfflineAPIClient (debería estar en session_state desde login)
+        offline_api = st.session_state.get('offline_api_client')
+        if not offline_api:
+            # Fallback: crear uno nuevo
+            offline_api = get_offline_api_client()
+            if st.session_state.get('user_id') and st.session_state.get('session_token'):
+                offline_api.set_user(st.session_state.user_id, st.session_state.session_token)
+        
+        # Mostrar página seleccionada - usar OfflineAPIClient
         if page == "📅 Calendario":
-            show_calendar_view(st.session_state.user_id, api_client, st.session_state.session_token)
+            show_calendar_view(st.session_state.user_id, offline_api, st.session_state.session_token)
         elif page == "📋 Eventos":
-            show_events_view(st.session_state.user_id, api_client, st.session_state.session_token)
+            show_events_view(st.session_state.user_id, offline_api, st.session_state.session_token)
         elif page == "👥 Grupos":
-            show_groups_view(st.session_state.user_id, api_client, st.session_state.session_token)
+            show_groups_view(st.session_state.user_id, offline_api, st.session_state.session_token)
         elif page.startswith("📧 Invitaciones"):  # Maneja tanto con badge como sin badge
-            show_invitations_view(st.session_state.user_id, api_client, st.session_state.session_token)
+            show_invitations_view(st.session_state.user_id, offline_api, st.session_state.session_token)
         elif page == "🔔 Notificaciones":
-            show_notifications_view(st.session_state.user_id, api_client, st.session_state.session_token, ws_client)
+            show_notifications_view(st.session_state.user_id, offline_api, st.session_state.session_token, ws_client)
 
 # Iniciar WebSocket solo si no está ya corriendo
 if __name__ == "__main__":
