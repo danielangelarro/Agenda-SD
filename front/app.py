@@ -11,8 +11,17 @@ from ui.event_view import show_events_view
 from ui.group_view import show_groups_view
 from ui.invitations_view import show_invitations_view
 from ui.notifications_view import show_notifications_view, ensure_notification_state
+from ui.offline_ui import (
+    render_connectivity_badge, render_sync_status, render_pending_banner,
+    render_offline_banner, render_conflict_list, init_offline_state,
+    update_offline_state, get_offline_state
+)
 from services.api_client import APIClient
 from services.websocket_client import WebSocketClient
+from services.offline_storage import OfflineStorage
+from services.pending_operations import PendingOperationsQueue
+from services.sync_manager import SyncManager
+from services.conflict_resolver import ConflictResolver
 
 # Suppress asyncio warnings about unclosed resources
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*coroutine.*was never awaited.*')
@@ -124,6 +133,7 @@ def main():
         st.session_state.logged_in = False
 
     ensure_notification_state()
+    init_offline_state()
 
     # Intentar restaurar sesión si no está logueado
     if not st.session_state.logged_in:
@@ -133,23 +143,63 @@ def main():
         show_login_page(api_client)
     else:
         ws_client = get_ws_client()
+        
+        # Inicializar componentes offline
+        user_id = st.session_state.get('user_id', 0)
+        if 'offline_storage' not in st.session_state:
+            st.session_state.offline_storage = OfflineStorage(user_id=user_id)
+        if 'pending_queue' not in st.session_state:
+            storage = st.session_state.offline_storage
+            st.session_state.pending_queue = PendingOperationsQueue(storage.db_path)
+        if 'sync_manager' not in st.session_state:
+            st.session_state.sync_manager = SyncManager(
+                api_client,
+                st.session_state.offline_storage,
+                st.session_state.pending_queue
+            )
+        if 'conflict_resolver' not in st.session_state:
+            st.session_state.conflict_resolver = ConflictResolver()
+        
+        sync_manager = st.session_state.sync_manager
+        conflict_resolver = st.session_state.conflict_resolver
+        pending_queue = st.session_state.pending_queue
+        
+        # Actualizar estado offline
+        update_offline_state(sync_manager, conflict_resolver, pending_queue)
+        offline_state = get_offline_state()
+        
         # Make sure username is in session state
         if 'username' not in st.session_state:
-            # Try to get username from API
+            # Try to get username from API or local cache
             try:
                 users = api_client.list_users(st.session_state.session_token)
-                # Find current user ID
                 for user in users:
-                    if user[0] == st.session_state.user_id:  # user[0] is user_id
-                        st.session_state.username = user[1]  # user[1] is username
+                    if user[0] == st.session_state.user_id:
+                        st.session_state.username = user[1]
                         break
             except Exception as e:
-                st.error(f"Error getting user info: {e}")
-                st.session_state.logged_in = False
-                st.rerun()
+                # Intentar desde caché local
+                cached_session = st.session_state.offline_storage.get_session()
+                if cached_session and cached_session.get('username'):
+                    st.session_state.username = cached_session['username']
+                else:
+                    st.error(f"Error getting user info: {e}")
+                    st.session_state.logged_in = False
+                    st.rerun()
 
         # Sidebar con información de conexión
         st.sidebar.title(f"👋 Hola, {st.session_state.username}")
+        
+        # Mostrar estado de conectividad
+        is_online = sync_manager.is_online()
+        render_connectivity_badge(is_online, offline_state['connectivity_state'])
+        
+        # Mostrar estado de sincronización
+        render_sync_status(
+            offline_state['pending_sync_count'],
+            offline_state['last_sync_time'],
+            offline_state['sync_in_progress']
+        )
 
         # Mostrar estado de conexión WebSocket
         # Ajustar WS al coordinador activo según API
@@ -160,8 +210,6 @@ def main():
                 ws_client.configure_from_base(base_url, ws_port)
         except Exception:
             pass
-
-        st.sidebar.info(f"🌐 Conectado a: {ws_client.url}")
 
         # Get user ID from token if not in session state
         if 'user_id' not in st.session_state:
